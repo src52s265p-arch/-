@@ -1,0 +1,38 @@
+import type { VisualModuleDefinition } from '../types';
+import { createAudioMapper, createLiveMapper } from '../mapping';
+
+export const purpleModule: VisualModuleDefinition = {
+  id: 'Purple',
+  label: 'Purple',
+  liveLabel: 'Purple',
+  presetId: 'Purple',
+  description: 'Liquid holographic purple stream',
+  renderMode: 'webgl-2d',
+  defaultLook: {
+    currentScene: 'Purple',
+    baseColor: '#ffffff',
+    secondaryColor: '#0a0a1f',
+    accentColor: '#00e1ff',
+    bgColor: '#02030a',
+    bloomIntensity: 1.35,
+    bloomThreshold: 0.38,
+    rgbSplitAmount: 0.002,
+    distortion: 0.12,
+    glitchActive: false,
+    speed: 0.85,
+    chaos: 0.5,
+    contrast: 1.12,
+    saturation: 1.06,
+    brightness: 0.98,
+    textInput: '',
+    textColor: '#e7fbff',
+    textFontSize: 4.8,
+    textFontWeight: 900,
+    textLetterSpacing: 0.02,
+    textAnimStyle: 'Floating',
+    musicCameraEnabled: false,
+    audioFxReactive: true,
+  },
+  mapAudioToVisualState: createAudioMapper({ beat: 1.08, bass: 1.18, mid: 1.08, treble: 1.32, transient: 1.2, fx: 1.26, experimental: 1.2 }),
+  mapLiveControlsToParams: createLiveMapper({ motion: 1.22, impact: 1.14, warmth: 0.76, saturation: 1.52, brightness: 0.62, detail: 1.46, variation: 1.36, structureScale: 1.48, structureWarp: 1.72, atmosphereGlow: 1.92, atmosphereDepth: 1.48, bloomBoost: 0.5, rgbSplitBoost: 0.018, distortionBoost: 0.3 }),
+};

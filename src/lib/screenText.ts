@@ -1,0 +1,90 @@
+import type { OutputMode, ScreenTransitionStyle } from '@/store/useStore';
+import { getVisualLabel } from './visualLabels';
+
+export const screenText = {
+  EN: {
+    screenRouter: 'SCREEN ROUTER',
+    deviceUrl: 'Device URL',
+    effectOn: 'Effect On',
+    outputMode: 'Output Mode',
+    transitionStyle: 'Transition Style',
+    musicLink: 'Music Link',
+    transitionAmount: 'Transition Amount',
+    musicEnergy: 'Music Energy',
+    beatTrigger: 'Beat Trigger',
+    outputDisabled: 'Output Disabled',
+    unknownScreen: 'Unknown Screen',
+    synced: 'Synced',
+    waiting: 'Waiting',
+    on: 'On',
+    off: 'Off',
+    modes: {
+      mirror: 'Mirror',
+      solo: 'Solo',
+      split: 'Split',
+    },
+    transitions: {
+      crossfade: 'Crossfade',
+      scan: 'Scan',
+      strobe: 'Strobe',
+      cut: 'Cut',
+    },
+    scenes: {
+      'Video Flow': 'Video Flow',
+      'Layered Stage': 'Layered Stage',
+      Purple: 'Purple',
+      Dumbar: 'Grey Glass',
+      Topology: 'Sonic Topology',
+      Liquid: 'Liquid',
+      Chromaflux: 'Chromaflux',
+      'Blue Font': 'Liquid Interference',
+      Cyber: 'Cyber',
+      Pulse: 'Neon Pulse',
+      Void: 'Dark Space',
+    },
+  },
+  ZH: {
+    screenRouter: '多屏路由',
+    deviceUrl: '设备地址',
+    effectOn: '应用特效到',
+    outputMode: '输出模式',
+    transitionStyle: '转场风格',
+    musicLink: '音乐联动',
+    transitionAmount: '转场强度',
+    musicEnergy: '音乐能量',
+    beatTrigger: '节拍触发',
+    outputDisabled: '输出已关闭',
+    unknownScreen: '未知屏幕',
+    synced: '已同步',
+    waiting: '等待同步',
+    on: '开启',
+    off: '关闭',
+    modes: {
+      mirror: '镜像',
+      solo: '单屏',
+      split: '分屏',
+    },
+    transitions: {
+      crossfade: '淡入淡出',
+      scan: '扫描',
+      strobe: '频闪',
+      cut: '切换',
+    },
+    scenes: {
+      'Layered Stage': '分层舞台',
+      Purple: 'Purple',
+      Dumbar: '灰玻璃',
+      Topology: '声波拓扑',
+      Liquid: '流体',
+      Chromaflux: 'Chromaflux',
+      'Blue Font': '液态干扰',
+      Cyber: '赛博',
+      Pulse: '霓虹脉冲',
+      Void: '暗空间',
+    },
+  },
+};
+
+export const getOutputModeLabel = (language: 'EN' | 'ZH', mode: OutputMode) => screenText[language].modes[mode];
+export const getTransitionLabel = (language: 'EN' | 'ZH', style: ScreenTransitionStyle) => screenText[language].transitions[style];
+export const getScreenSceneLabel = (language: 'EN' | 'ZH', scene: string) => screenText[language].scenes[scene as keyof typeof screenText.EN.scenes] || getVisualLabel(language, scene);

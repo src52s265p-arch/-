@@ -1,14 +1,35 @@
+export type MicrophoneStatus = 'disconnected' | 'requesting' | 'connected' | 'receiving' | 'low' | 'error';
+
+export interface AudioDebugSnapshot {
+  status: MicrophoneStatus;
+  message: string;
+  contextState: string;
+  streamActive: boolean;
+  rawRms: number;
+  rawVolume: number;
+  frequencyDelta: number;
+  frequencyChanged: boolean;
+  peakFrequencyBin: number;
+  sampleRate: number;
+  sourceType: 'none' | 'mic' | 'music' | 'api';
+}
+
 export class AudioEngine {
   private static instance: AudioEngine;
   
   public context: AudioContext | null = null;
   public analyser: AnalyserNode | null = null;
-  public dataArray: Uint8Array | null = null;
-  public timeDataArray: Uint8Array | null = null;
+  public dataArray: Uint8Array<ArrayBuffer> | null = null;
+  public timeDataArray: Uint8Array<ArrayBuffer> | null = null;
   public source: MediaStreamAudioSourceNode | null = null;
+  public stream: MediaStream | null = null;
+  public activeSourceType: 'none' | 'mic' | 'music' | 'api' = 'none';
   private highPass: BiquadFilterNode | null = null;
   private lowPass: BiquadFilterNode | null = null;
   private compressor: DynamicsCompressorNode | null = null;
+  private musicInput: GainNode | null = null;
+  private musicOutput: GainNode | null = null;
+  private musicNodes: AudioNode[] = [];
   
   // Expose analyzed data for Three.js to read synchronously without React state overhead
   public current = {
@@ -27,6 +48,20 @@ export class AudioEngine {
     dynamicRange: 0,
   };
 
+  public debug: AudioDebugSnapshot = {
+    status: 'disconnected',
+    message: 'Microphone is not connected.',
+    contextState: 'none',
+    streamActive: false,
+    rawRms: 0,
+    rawVolume: 0,
+    frequencyDelta: 0,
+    frequencyChanged: false,
+    peakFrequencyBin: 0,
+    sampleRate: 0,
+    sourceType: 'none',
+  };
+
   private beatThreshold = 1.3;
   private energyHistory: number[] = new Array(64).fill(0);
   private energyIndex = 0;
@@ -39,6 +74,7 @@ export class AudioEngine {
     highMid: 0,
     treble: 0,
   };
+  private previousFrequencyFrame: Uint8Array<ArrayBuffer> | null = null;
 
   private constructor() {}
 
@@ -52,60 +88,259 @@ export class AudioEngine {
   public isSimulating: boolean = false;
   private simTime: number = 0;
 
+  private resetCurrent() {
+    this.current = {
+      volume: 0,
+      subBass: 0,
+      bass: 0,
+      lowMid: 0,
+      mid: 0,
+      highMid: 0,
+      treble: 0,
+      energy: 0,
+      beat: 0,
+      spectralCentroid: 0,
+      spectralFlux: 0,
+      transient: 0,
+      dynamicRange: 0,
+    };
+    this.energyHistory.fill(0);
+    this.energyIndex = 0;
+    this.adaptivePeak = 0.18;
+    this.previousBands = {
+      subBass: 0,
+      bass: 0,
+      lowMid: 0,
+      mid: 0,
+      highMid: 0,
+      treble: 0,
+    };
+    this.previousFrequencyFrame = null;
+    this.debug.rawRms = 0;
+    this.debug.rawVolume = 0;
+    this.debug.frequencyDelta = 0;
+    this.debug.frequencyChanged = false;
+    this.debug.peakFrequencyBin = 0;
+  }
+
+  private setDebug(next: Partial<AudioDebugSnapshot>) {
+    this.debug = {
+      ...this.debug,
+      contextState: this.context?.state ?? 'none',
+      streamActive: Boolean(this.stream?.getAudioTracks().some((track) => track.readyState === 'live')),
+      sampleRate: this.context?.sampleRate ?? 0,
+      sourceType: this.activeSourceType,
+      ...next,
+    };
+  }
+
+  private async ensureContext(): Promise<AudioContext> {
+    const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextCtor) {
+      throw new Error('This browser does not support Web Audio API.');
+    }
+    if (!this.context || this.context.state === 'closed') {
+      this.context = new AudioContextCtor();
+    }
+    if (this.context.state === 'suspended') {
+      await this.context.resume();
+    }
+    return this.context;
+  }
+
+  private createAnalyser(context: AudioContext) {
+    this.analyser?.disconnect();
+    this.analyser = context.createAnalyser();
+    this.analyser.fftSize = 4096;
+    this.analyser.smoothingTimeConstant = 0.68;
+    this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+    this.timeDataArray = new Uint8Array(this.analyser.fftSize);
+  }
+
+  private stopActiveNodes() {
+    this.source?.disconnect();
+    this.stream?.getTracks().forEach((track) => track.stop());
+    this.highPass?.disconnect();
+    this.lowPass?.disconnect();
+    this.compressor?.disconnect();
+    this.musicInput?.disconnect();
+    this.musicOutput?.disconnect();
+    this.musicNodes.forEach((node) => {
+      try {
+        if ('stop' in node && typeof (node as any).stop === 'function') {
+          (node as any).stop();
+        }
+      } catch {
+        // Node may already be stopped.
+      }
+      try {
+        node.disconnect();
+      } catch {
+        // Node may already be disconnected.
+      }
+    });
+    this.source = null;
+    this.stream = null;
+    this.highPass = null;
+    this.lowPass = null;
+    this.compressor = null;
+    this.musicInput = null;
+    this.musicOutput = null;
+    this.musicNodes = [];
+  }
+
+  public stopCurrentAudioSource() {
+    this.stopActiveNodes();
+    this.analyser?.disconnect();
+    this.analyser = null;
+    this.dataArray = null;
+    this.timeDataArray = null;
+    this.activeSourceType = 'none';
+    this.isSimulating = false;
+    this.resetCurrent();
+    this.setDebug({ status: 'disconnected', message: 'Microphone is not connected.' });
+  }
+
   public async initialize(): Promise<void> {
-    if (this.context) return;
+    await this.startMicrophone();
+  }
+
+  public async startMicrophone(): Promise<void> {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      throw new Error('This browser does not support microphone capture.');
+    }
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (!window.isSecureContext && !isLocalhost) {
+      throw new Error('Microphone capture requires localhost or HTTPS.');
+    }
 
     try {
+      this.setDebug({ status: 'requesting', message: 'Waiting for microphone permission.' });
+      const context = await this.ensureContext();
+      this.stopCurrentAudioSource();
+      this.setDebug({ status: 'requesting', message: 'Browser permission prompt is open.' });
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
+          echoCancellation: false,
+          noiseSuppression: false,
           autoGainControl: false,
-          channelCount: 1,
-          sampleRate: 48000,
-          sampleSize: 16,
         },
         video: false,
       });
-      
-      this.context = new (window.AudioContext || (window as any).webkitAudioContext)();
-      await this.context.resume();
-      
-      this.analyser = this.context.createAnalyser();
-      this.analyser.fftSize = 4096;
-      this.analyser.smoothingTimeConstant = 0.68;
+      this.createAnalyser(context);
 
-      this.highPass = this.context.createBiquadFilter();
+      this.highPass = context.createBiquadFilter();
       this.highPass.type = 'highpass';
       this.highPass.frequency.value = 55;
       this.highPass.Q.value = 0.7;
 
-      this.lowPass = this.context.createBiquadFilter();
+      this.lowPass = context.createBiquadFilter();
       this.lowPass.type = 'lowpass';
       this.lowPass.frequency.value = 15500;
       this.lowPass.Q.value = 0.5;
 
-      this.compressor = this.context.createDynamicsCompressor();
+      this.compressor = context.createDynamicsCompressor();
       this.compressor.threshold.value = -42;
       this.compressor.knee.value = 18;
       this.compressor.ratio.value = 3.2;
       this.compressor.attack.value = 0.004;
       this.compressor.release.value = 0.16;
       
-      this.source = this.context.createMediaStreamSource(stream);
+      this.stream = stream;
+      this.source = context.createMediaStreamSource(stream);
       this.source.connect(this.highPass);
       this.highPass.connect(this.lowPass);
       this.lowPass.connect(this.compressor);
-      this.compressor.connect(this.analyser);
+      this.compressor.connect(this.analyser!);
       
-      this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
-      this.timeDataArray = new Uint8Array(this.analyser.fftSize);
+      this.activeSourceType = 'mic';
       this.isSimulating = false;
+      this.resetCurrent();
+      this.setDebug({ status: 'connected', message: 'Microphone is connected. Listening for input.' });
     } catch (err) {
-      console.warn('Failed to initialize audio capture. Falling back to simulated audio:', err);
-      this.isSimulating = true;
-      // We don't throw error so the app can continue
+      this.stopCurrentAudioSource();
+      this.isSimulating = false;
+      this.setDebug({ status: 'error', message: err instanceof Error ? err.message : 'Could not start microphone.' });
+      throw err;
     }
+  }
+
+  public async startMusicSource(volume = 1): Promise<{ context: AudioContext; input: GainNode; output: GainNode }> {
+    const context = await this.ensureContext();
+    this.stopCurrentAudioSource();
+    this.createAnalyser(context);
+    this.musicInput = context.createGain();
+    this.musicOutput = context.createGain();
+    this.musicInput.gain.value = 1;
+    this.musicOutput.gain.value = volume;
+    this.musicInput.connect(this.analyser!);
+    this.musicInput.connect(this.musicOutput);
+    this.musicOutput.connect(context.destination);
+    this.activeSourceType = 'music';
+    this.isSimulating = false;
+    this.resetCurrent();
+    this.setDebug({ status: 'disconnected', message: 'Microphone is not connected.' });
+    return { context, input: this.musicInput, output: this.musicOutput };
+  }
+
+  public async ensureMusicSource(volume = 1): Promise<{ context: AudioContext; input: GainNode; output: GainNode }> {
+    if (this.activeSourceType === 'music' && this.musicInput && this.musicOutput && this.context) {
+      await this.resume();
+      this.musicOutput.gain.value = volume;
+      return { context: this.context, input: this.musicInput, output: this.musicOutput };
+    }
+    return this.startMusicSource(volume);
+  }
+
+  public setMusicVolume(volume: number) {
+    if (this.musicOutput && this.context) {
+      this.musicOutput.gain.setTargetAtTime(volume, this.context.currentTime, 0.03);
+    }
+  }
+
+  public registerMusicNode(node: AudioNode) {
+    this.musicNodes.push(node);
+  }
+
+  public setExternalSnapshot(next: Partial<typeof this.current>) {
+    if (this.activeSourceType !== 'api') {
+      this.stopCurrentAudioSource();
+      this.activeSourceType = 'api';
+    }
+    this.current = {
+      volume: Math.max(this.current.volume * 0.45, next.volume ?? 0),
+      subBass: Math.max(this.current.subBass * 0.45, next.subBass ?? 0),
+      bass: Math.max(this.current.bass * 0.45, next.bass ?? 0),
+      lowMid: Math.max(this.current.lowMid * 0.45, next.lowMid ?? 0),
+      mid: Math.max(this.current.mid * 0.45, next.mid ?? 0),
+      highMid: Math.max(this.current.highMid * 0.45, next.highMid ?? 0),
+      treble: Math.max(this.current.treble * 0.45, next.treble ?? 0),
+      energy: Math.max(this.current.energy * 0.45, next.energy ?? 0),
+      beat: Math.max(this.current.beat * 0.22, next.beat ?? 0),
+      spectralCentroid: next.spectralCentroid ?? this.current.spectralCentroid,
+      spectralFlux: Math.max(this.current.spectralFlux * 0.22, next.spectralFlux ?? 0),
+      transient: Math.max(this.current.transient * 0.22, next.transient ?? 0),
+      dynamicRange: Math.max(this.current.dynamicRange * 0.45, next.dynamicRange ?? 0),
+    };
+  }
+
+  public async resume(): Promise<void> {
+    if (this.context?.state === 'suspended') {
+      await this.context.resume();
+    }
+  }
+
+  public stopMicrophone(closeContext = false) {
+    this.stopCurrentAudioSource();
+
+    if (closeContext && this.context) {
+      void this.context.close();
+      this.context = null;
+    }
+  }
+
+  public hasLiveInput(): boolean {
+    return Boolean(this.analyser && this.stream?.getAudioTracks().some((track) => track.readyState === 'live'));
   }
 
   public update(gain: number = 1.0, config?: { subBassSense: number; bassSense: number; midSense: number; trebleSense: number; noiseGate: number; beatMultiplier: number }): void {
@@ -150,10 +385,20 @@ export class AudioEngine {
     let vSum = 0, subSum = 0, bSum = 0, lmSum = 0, mSum = 0, hmSum = 0, tSum = 0;
     let weightedFrequencySum = 0;
     let audibleSum = 0;
-    const nyquist = (this.context?.sampleRate ?? 44100) / 2;
+    let peakFrequencyBin = 0;
+    let peakFrequencyValue = 0;
+    let frequencyDeltaSum = 0;
+    const needsDebugFrequency = this.activeSourceType === 'mic';
 
     for (let i = 0; i < length; i++) {
       let val = data[i];
+      if (needsDebugFrequency && val > peakFrequencyValue) {
+        peakFrequencyValue = val;
+        peakFrequencyBin = i;
+      }
+      if (needsDebugFrequency && this.previousFrequencyFrame) {
+        frequencyDeltaSum += Math.abs(data[i] - this.previousFrequencyFrame[i]);
+      }
       if (val < noiseGate) val = 0;
       vSum += val;
       const normalizedFrequency = i / Math.max(1, length - 1);
@@ -167,6 +412,13 @@ export class AudioEngine {
       else if (i >= 93 && i < 280) hmSum += val;
       else if (i >= 280) tSum += val;
     }
+    if (needsDebugFrequency) {
+      if (!this.previousFrequencyFrame || this.previousFrequencyFrame.length !== data.length) {
+        this.previousFrequencyFrame = new Uint8Array(data.length);
+      }
+      this.previousFrequencyFrame.set(data);
+    }
+    const frequencyDelta = needsDebugFrequency ? frequencyDeltaSum / length / 255 : 0;
 
     const subSense = config?.subBassSense ?? 1.0;
     const bassSense = config?.bassSense ?? 1.0;
@@ -184,6 +436,7 @@ export class AudioEngine {
 
     const freqVolume = (vSum / length / 255) * gain;
     const rawVolume = Math.max(freqVolume * 2.6, gatedRms * 5.5) * gain;
+    const ungatedRawVolume = Math.max(freqVolume * 2.6, rms * 5.5) * gain;
     this.adaptivePeak = Math.max(rawVolume, this.adaptivePeak * 0.996, 0.16);
     const volume = Math.min(1, Math.pow(rawVolume / (this.adaptivePeak + 0.001), 0.95));
 
@@ -257,16 +510,31 @@ export class AudioEngine {
     } else {
         this.current.beat *= 0.62;
     }
+
+    if (this.activeSourceType === 'mic') {
+      const receiving = ungatedRawVolume > 0.04 || frequencyDelta > 0.006;
+      this.setDebug({
+        status: receiving ? 'receiving' : 'low',
+        message: receiving ? 'Receiving microphone signal.' : 'Input volume is too low.',
+        rawRms: rms,
+        rawVolume: ungatedRawVolume,
+        frequencyDelta,
+        frequencyChanged: frequencyDelta > 0.006,
+        peakFrequencyBin,
+      });
+    }
+  }
+
+  public getDebugSnapshot(): AudioDebugSnapshot {
+    return { ...this.debug };
   }
 
   public destroy() {
-    this.source?.disconnect();
-    this.highPass?.disconnect();
-    this.lowPass?.disconnect();
-    this.compressor?.disconnect();
-    this.analyser?.disconnect();
-    this.context?.close();
-    this.context = null;
+    this.stopCurrentAudioSource();
+    if (this.context) {
+      void this.context.close();
+      this.context = null;
+    }
   }
 }
 

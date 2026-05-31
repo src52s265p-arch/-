@@ -73,6 +73,7 @@ export function FxPanel() {
 
   useEffect(() => {
     let frame = 0;
+    let lastUpdate = 0;
     const live = {
       bloom: liveFx.bloom,
       split: liveFx.split,
@@ -80,6 +81,13 @@ export function FxPanel() {
     };
 
     const update = () => {
+      const now = performance.now();
+      if (now - lastUpdate < 80) {
+        frame = requestAnimationFrame(update);
+        return;
+      }
+      lastUpdate = now;
+
       const { energy, beat, bass, subBass, mid, treble } = getAudioDriveSnapshot(audioDriveMode);
       const enabled = autoVjEnabled && audioFxReactive;
       const targetBloom = bloomIntensity + (enabled ? energy * 1.05 + beat * 2.4 + treble * 0.5 : 0);

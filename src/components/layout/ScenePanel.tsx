@@ -1,14 +1,10 @@
 import { useStore } from '@/store/useStore';
 import { LayoutGrid } from 'lucide-react';
 import { t } from '@/lib/i18n';
+import { getVisualLabel } from '@/lib/visualLabels';
+import { visualModules } from '@/visuals/registry';
 
-const scenesConfig = [
-  { id: 'Void' },
-  { id: 'Liquid' },
-  { id: 'Cyber' },
-  { id: 'Topology' },
-  { id: 'Pulse' },
-];
+const scenesConfig = visualModules.map((module) => ({ id: module.id }));
 
 export function ScenePanel() {
   const { currentScene, setCurrentScene, language } = useStore();
@@ -32,7 +28,7 @@ export function ScenePanel() {
                 : "bg-white/5 text-white/50 border-white/5 hover:bg-white/10 hover:text-white"
             }`}
           >
-            {strings.SCENES?.[scene.id] || scene.id}
+            {strings.SCENES?.[scene.id] || getVisualLabel(language, scene.id)}
           </button>
         ))}
       </div>

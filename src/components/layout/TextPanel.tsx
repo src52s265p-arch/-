@@ -22,8 +22,13 @@ const TextSlider = ({ label, value, onChange, min = 0, max = 2, step = 0.01 }: a
 );
 
 export function TextPanel() {
-  const { language, textInput, textAnimStyle, textGlow, textSpeed, textReactive, textFontSize, textFontWeight, textLetterSpacing, setTextEngine, applyPreset } = useStore();
-  const i18n = t[language];
+  const { language, textInput, textAnimStyle, textGlow, textSpeed, textReactive, textColor, textFontSize, textFontWeight, textLetterSpacing, setTextEngine } = useStore();
+  const i18n = t[language] as (typeof t)[typeof language] & {
+    FONT_SIZE?: string;
+    FONT_WEIGHT?: string;
+    LETTER_SPACING?: string;
+    TEXT_COLOR?: string;
+  };
   const [localText, setLocalText] = useState(textInput);
 
   useEffect(() => {
@@ -40,30 +45,22 @@ export function TextPanel() {
   ];
 
   const handleApply = () => {
-    setTextEngine('textInput', localText || " ");
-    const lower = localText.toLowerCase();
-    
-    // Auto sync with visuals occasionally
-    if (lower.includes('cyber') || lower.includes('future') || lower.includes('glitch')) {
-      applyPreset('Cyberpunk');
-    } else if (lower.includes('dream') || lower.includes('ocean') || lower.includes('water')) {
-      applyPreset('Liquid Dream');
-    } else if (lower.includes('chaos') || lower.includes('rage')) {
-      applyPreset('Neon Pulse');
-      setTextEngine('textAnimStyle', 'Glitch');
-    } else if (lower.includes('space') || lower.includes('void')) {
-      applyPreset('Dark Space');
-    }
+    setTextEngine('textInput', localText);
   };
 
   const handleReset = () => {
-    setLocalText('NEONPULSE');
-    setTextEngine('textInput', 'NEONPULSE');
+    setLocalText('GAFA');
+    setTextEngine('textInput', 'GAFA');
+    setTextEngine('textAnimStyle', 'Glitch');
+    setTextEngine('textFontSize', 4.6);
+    setTextEngine('textFontWeight', 900);
+    setTextEngine('textLetterSpacing', 0.02);
+    setTextEngine('textColor', '#ffffff');
   };
 
   const handleClear = () => {
     setLocalText('');
-    setTextEngine('textInput', ' '); // Use a space so canvas doesn't crash
+    setTextEngine('textInput', '');
   };
 
   return (
@@ -83,7 +80,7 @@ export function TextPanel() {
             value={localText}
             onChange={(e) => {
               setLocalText(e.target.value);
-              setTextEngine('textInput', e.target.value || " ");
+              setTextEngine('textInput', e.target.value);
             }}
             onKeyDown={(e) => e.key === 'Enter' && handleApply()}
             className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-3 text-[13px] font-mono text-white outline-none focus:border-purple-500/50 focus:bg-white/5 transition-all shadow-inner placeholder:text-white/20"
@@ -119,6 +116,27 @@ export function TextPanel() {
             <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-white/30 text-[10px]">
               ▼
             </div>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <label className="text-[10px] uppercase font-bold text-white/40 tracking-widest">
+            {i18n.TEXT_COLOR || 'Text Color'}
+          </label>
+          <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-black/50 px-4 py-3">
+            <input
+              type="color"
+              value={textColor}
+              onChange={(e) => setTextEngine('textColor', e.target.value)}
+              className="h-8 w-10 cursor-pointer rounded border border-white/20 bg-transparent p-0"
+              aria-label={i18n.TEXT_COLOR || 'Text Color'}
+            />
+            <input
+              type="text"
+              value={textColor}
+              onChange={(e) => setTextEngine('textColor', e.target.value)}
+              className="min-w-0 flex-1 bg-transparent font-mono text-[12px] uppercase text-white outline-none"
+            />
           </div>
         </div>
 
